@@ -1,0 +1,31 @@
+# ── Datos pesados (superan el límite de 100 MB de GitHub) ──
+data/*.csv
+data/archive/
+db/oulad_dump.sql
+db/dump_error.log
+
+# El zip del dataset (43 MB) — descomenta si NO quieres subirlo
+# data/archive.zip
+
+# ── Gráficos generados (se regeneran con el EDA) ──
+plots/
+
+# ── Entorno virtual ──
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ── Sistema / editor ──
+.DS_Store
+.idea/
+.vscode/
+
+# ── Respaldo temporal del artículo ──
+caso_practico_3_paper_APA_BACKUP.docx
+
+# ── NUNCA subir secretos (tokens, claves, contraseñas) ──
+*.token
+*.key
+.env
+secrets*

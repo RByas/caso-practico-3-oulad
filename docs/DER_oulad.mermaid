@@ -1,0 +1,90 @@
+%% Diagrama Entidad-Relación — Modelo OULAD (MySQL)
+%% Caso Práctico 3 · Ciencia de Datos I
+%% * = campo ordinal generado (STORED)
+erDiagram
+    courses ||--o{ assessments : tiene
+    courses ||--o{ vle : contiene
+    courses ||--o{ student_info : inscribe
+    courses ||--o{ student_registration : registra
+    courses ||--o{ student_vle : contexto
+    assessments ||--o{ student_assessment : evalua
+    vle ||--o{ student_vle : interaccion
+    domain_assessment_type ||..o{ assessments : dominio
+    domain_activity_type ||..o{ vle : dominio
+
+    courses {
+        varchar code_module PK
+        varchar code_presentation PK
+        int module_presentation_length
+    }
+    assessments {
+        int id_assessment PK
+        varchar code_module FK
+        varchar code_presentation FK
+        varchar assessment_type
+        tinyint assessment_type_ord "ordinal *"
+        int date_due
+        float weight
+    }
+    vle {
+        int id_site PK
+        varchar code_module FK
+        varchar code_presentation FK
+        varchar activity_type
+        tinyint activity_type_ord "ordinal *"
+        smallint week_from
+        smallint week_to
+    }
+    student_info {
+        int id_student PK
+        varchar code_module PK_FK
+        varchar code_presentation PK_FK
+        varchar gender
+        tinyint gender_ord "ordinal *"
+        varchar region
+        varchar highest_education
+        tinyint highest_education_ord "ordinal *"
+        varchar imd_band
+        tinyint imd_band_ord "ordinal *"
+        varchar age_band
+        tinyint age_band_ord "ordinal *"
+        varchar disability
+        tinyint disability_ord "ordinal *"
+        tinyint num_of_prev_attempts
+        smallint studied_credits
+        varchar final_result
+        tinyint final_result_ord "ordinal *"
+    }
+    student_registration {
+        int id_student PK
+        varchar code_module PK_FK
+        varchar code_presentation PK_FK
+        int date_registration
+        int date_unregistration
+    }
+    student_assessment {
+        int id_assessment PK_FK
+        int id_student PK
+        int date_submitted
+        tinyint is_banked
+        float score
+    }
+    student_vle {
+        int id_student PK
+        int id_site PK_FK
+        int date_interaction PK
+        varchar code_module FK
+        varchar code_presentation FK
+        int sum_click
+    }
+    domain_assessment_type {
+        varchar assessment_type PK
+        tinyint assessment_type_ord
+        varchar description
+    }
+    domain_activity_type {
+        varchar activity_type PK
+        tinyint activity_type_ord
+        varchar category
+        varchar description
+    }
