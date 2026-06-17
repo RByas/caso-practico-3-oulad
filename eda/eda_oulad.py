@@ -68,45 +68,81 @@ def get_connection():
 
 def load_master_data() -> pd.DataFrame:
     """
-    Construye el dataset maestro en Python para evitar que MySQL
-    use espacio en disco temporal con el GROUP BY de la vista.
+    Construye el dataset maestro: un registro por (estudiante, módulo) con sus
+    notas y su actividad en el VLE, listo para el análisis.
+
+    OPTIMIZACIÓN DE MEMORIA
+    -----------------------
+    La tabla student_vle tiene ~10.6 millones de filas. Cargarla completa en
+    memoria con un solo SELECT consume 1-2 GB de RAM y, en equipos con poca
+    memoria libre, provoca swapping y el programa parece "colgarse".
+
+    Para evitarlo, student_vle NO se carga de golpe: se lee por BLOQUES (chunks)
+    de 2 millones de filas y se agrega de forma incremental y vectorizada. Así
+    el pico de memoria es el de un solo bloque, no el de la tabla entera.
+
+    Devuelve
+    --------
+    pd.DataFrame con una fila por estudiante-módulo y columnas agregadas
+    (avg_score, num_assessments, total_clicks, active_days) más sus ordinales.
     """
-    print("📥 Cargando student_info desde MySQL...")
     conn = get_connection()
+    KEYS = ['id_student', 'code_module', 'code_presentation']
+
+    # ── Paso 1/4: dimensión principal (student_info ≈ 32,593 filas) ──────────
+    # Tabla pequeña: se carga completa sin problema. Es el "esqueleto" al que
+    # luego se le pegan las métricas agregadas.
+    print("📥 [1/4] Cargando student_info...")
     df_info = pd.read_sql("SELECT * FROM student_info", conn)
-    print(f"   → student_info: {len(df_info):,} filas")
+    print(f"   → {len(df_info):,} estudiantes")
 
-    print("📥 Agregando student_assessment en Python...")
-    df_sa = pd.read_sql(
-        "SELECT id_student, score FROM student_assessment WHERE score IS NOT NULL",
-        conn
-    )
-    agg_scores = df_sa.groupby('id_student').agg(
-        avg_score=('score', 'mean'),
-        num_assessments=('score', 'count')
-    ).reset_index()
-    print(f"   → student_assessment: {len(agg_scores):,} estudiantes")
+    # ── Paso 2/4: agregar notas en SQL (student_assessment) ──────────────────
+    # El promedio y conteo de notas se calculan en el SERVIDOR con GROUP BY, de
+    # modo que solo viajan ~23k filas agregadas en lugar de las 173k originales.
+    print("📥 [2/4] Agregando notas (student_assessment) en SQL...")
+    agg_scores = pd.read_sql(
+        """SELECT id_student,
+                  AVG(score)   AS avg_score,
+                  COUNT(score) AS num_assessments
+           FROM student_assessment
+           WHERE score IS NOT NULL
+           GROUP BY id_student""", conn)
+    print(f"   → {len(agg_scores):,} estudiantes con notas")
 
-    print("📥 Agregando student_vle en Python (puede tardar ~1 min)...")
-    df_vle = pd.read_sql(
-        """SELECT id_student, code_module, code_presentation,
-                  sum_click, date_interaction
-           FROM student_vle""",
-        conn
-    )
-    agg_vle = df_vle.groupby(['id_student', 'code_module', 'code_presentation']).agg(
-        total_clicks=('sum_click', 'sum'),
-        active_days=('date_interaction', 'nunique')
-    ).reset_index()
-    print(f"   → student_vle: {len(agg_vle):,} combinaciones estudiante-módulo")
+    # ── Paso 3/4: agregar VLE por CHUNKS (student_vle ≈ 10.6M filas) ─────────
+    # Se lee en bloques. De cada bloque se extraen dos agregados parciales:
+    #   • clicks_parts: suma de clicks por grupo (la suma es aditiva entre bloques).
+    #   • days_parts:   pares ÚNICOS (grupo, día) del bloque; al final se unen y
+    #                   se cuentan los días distintos (no se pueden sumar los
+    #                   conteos por bloque porque un mismo día puede repetirse
+    #                   entre bloques).
+    print("📥 [3/4] Agregando VLE por chunks (bajo uso de RAM)...")
+    clicks_parts, days_parts, total_rows = [], [], 0
+    for chunk in pd.read_sql(
+            """SELECT id_student, code_module, code_presentation,
+                      sum_click, date_interaction
+               FROM student_vle""", conn, chunksize=2_000_000):
+        total_rows += len(chunk)
+        clicks_parts.append(chunk.groupby(KEYS, sort=False)['sum_click'].sum())
+        days_parts.append(chunk[KEYS + ['date_interaction']].drop_duplicates())
+        print(f"   → procesadas {total_rows:,} filas...", end='\r')
+    print()
+
+    # Combinar los agregados parciales de todos los bloques en el total final
+    total_clicks = (pd.concat(clicks_parts).groupby(level=[0, 1, 2]).sum()
+                    .rename('total_clicks').reset_index())
+    active_days = (pd.concat(days_parts).drop_duplicates()
+                   .groupby(KEYS).size().rename('active_days').reset_index())
+    agg_vle = total_clicks.merge(active_days, on=KEYS, how='outer')
+    print(f"   → {len(agg_vle):,} combinaciones estudiante-módulo")
     conn.close()
 
-    # ── Merge en Python ──────────────────────────────────────────
-    print("🔗 Combinando tablas en memoria...")
+    # ── Paso 4/4: unir todo en el dataset maestro ───────────────────────────
+    # LEFT JOIN sobre student_info: cada estudiante conserva su fila aunque no
+    # tenga notas o actividad (esos casos quedan como NaN y se rellenan abajo).
+    print("🔗 [4/4] Combinando tablas en memoria...")
     df = df_info.merge(agg_scores, on='id_student', how='left')
-    df = df.merge(agg_vle,
-                  on=['id_student', 'code_module', 'code_presentation'],
-                  how='left')
+    df = df.merge(agg_vle, on=KEYS, how='left')
 
     # Campos ordinales calculados en Python
     df['final_result_ord'] = df['final_result'].map(
